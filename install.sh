@@ -39,7 +39,7 @@ MAIN_FILE="${DIR_PATH}/main.go"
 if [[ -f "${MAIN_FILE}" ]]; then
     echo "${MAIN_FILE} already exists. Skipping."
 else
-    cat <<EOF > "${MAIN_FILE}"
+    cat <<EOF >"${MAIN_FILE}"
 package main
 
 import (
@@ -52,7 +52,7 @@ import (
 var input string
 
 func main() {
-    input = strings.TrimSpace(input)
+	input = strings.TrimSpace(input)
 	fmt.Println(input)
 }
 EOF
