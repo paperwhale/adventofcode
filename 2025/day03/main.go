@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -58,11 +57,8 @@ func parseInput(input string) [][]int {
 	var lines [][]int
 	for s := range strings.SplitSeq(input, "\n") {
 		line := make([]int, len(s))
-		for i, b := range strings.Split(s, "") {
-			num, err := strconv.Atoi(b)
-			if err != nil {
-				panic("bad input")
-			}
+		for i, r := range s {
+			num := int(r - '0')
 			line[i] = num
 		}
 		lines = append(lines, line)
