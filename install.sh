@@ -11,7 +11,7 @@ usage() {
     echo "  -s  Session cookie (default: value of \$AOC_SESSION)"
 }
 
-while getopts "dys:" flag; do
+while getopts "d:y:s:" flag; do
     case "${flag}" in
     d) DAY=$OPTARG ;;
     y) YEAR=$OPTARG ;;
