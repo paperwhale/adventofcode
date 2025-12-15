@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bufio"
 	_ "embed"
 	"fmt"
-	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -15,113 +13,147 @@ import (
 //go:embed input.txt
 var input string
 
-type Button []int
-
-type Machine struct {
-	Lights   uint // bitmask where each bit corresponds to a light state
-	Buttons  []Button
-	Joltages []int
+// machine represents a single puzzle configuration containing a target light
+// state, a set of available buttons, and initial joltage levels.
+type machine struct {
+	targetLights uint64
+	buttons      [][]int
+	joltages     []int
 }
 
-type ButtonCombination struct {
-	Cost     int
-	Joltages []int
+// buttonCombination represents a pre-calculated effect of a set of buttons.
+type buttonCombination struct {
+	cost   int
+	lights []int
 }
 
 func main() {
-	input = strings.TrimSpace(input)
-	fmt.Println(Part1(strings.NewReader(input)))
-	fmt.Println(Part2(strings.NewReader(input)))
+	machines := parseInput(input)
+	fmt.Println(part1(machines))
+	fmt.Println(part2(machines))
 }
 
-func Part1(r io.Reader) int {
-	machines := parseInput(r)
-	presses := 0
+func part1(machines []machine) int {
+	totalPresses := 0
 	for _, m := range machines {
-		presses += solveMachine(m)
+		totalPresses += minButtonPresses(m)
 	}
-	return presses
+	return totalPresses
 }
 
-func Part2(r io.Reader) int {
-	machines := parseInput(r)
-	presses := 0
+func part2(machines []machine) int {
+	totalCost := 0
 	for _, m := range machines {
-		presses += configureJoltages(m)
+		totalCost += minJoltageCost(m)
 	}
-	return presses
+	return totalCost
 }
 
-func configureJoltages(m Machine) int {
-	combinations := buttonCombinations(m.Buttons, len(m.Joltages))
+func minButtonPresses(m machine) int {
+	buttonMasks := make([]uint64, len(m.buttons))
+	for i, btn := range m.buttons {
+		for _, lightIdx := range btn {
+			buttonMasks[i] |= 1 << lightIdx
+		}
+	}
 
+	minCost := len(m.buttons)
+	var solve func(index int, currentState uint64, currentCost int)
+	solve = func(index int, currentState uint64, currentCost int) {
+		if currentCost >= minCost {
+			return
+		}
+		if index == len(m.buttons) {
+			if currentState == m.targetLights {
+				minCost = currentCost
+			}
+			return
+		}
+		solve(index+1, currentState^buttonMasks[index], currentCost+1)
+		solve(index+1, currentState, currentCost)
+	}
+
+	solve(0, 0, 0)
+	return minCost
+}
+
+func minJoltageCost(m machine) int {
+	combinations := computeButtonCombinations(m)
 	memo := make(map[string]int)
-	var solve func([]int) int
-	solve = func(joltages []int) int {
-		if isZero(joltages) {
+
+	var solve func(currentJoltages []int) int
+	solve = func(currentJoltages []int) int {
+		if allZero(currentJoltages) {
 			return 0
 		}
 
-		key := fmt.Sprint(joltages)
+		key := fmt.Sprint(currentJoltages)
 		if val, ok := memo[key]; ok {
 			return val
 		}
 
-		targetParity := parityMask(joltages)
+		// Calculate the parity mask of the current joltages. We need a button combination
+		// that matches this parity to ensure the result after subtraction is divisible by 2.
+		targetParity := parityMask(currentJoltages)
 		candidates := combinations[targetParity]
+
 		minCost := math.MaxInt
-		for _, combination := range candidates {
-			nextState, ok := tryCombination(joltages, combination)
-			if ok {
-				res := solve(nextState)
-				if res != math.MaxInt {
-					total := combination.Cost + (2 * res)
-					if total < minCost {
-						minCost = total
-					}
+		for _, combo := range candidates {
+			nextState, ok := tryReduce(currentJoltages, combo)
+			if !ok {
+				continue
+			}
+			res := solve(nextState)
+			if res != math.MaxInt {
+				total := combo.cost + (2 * res)
+				if total < minCost {
+					minCost = total
 				}
 			}
 		}
+
 		memo[key] = minCost
 		return minCost
 	}
 
-	return solve(m.Joltages)
+	return solve(m.joltages)
 }
 
-// buttonCombinations generates a map of light masks to button combinations
-func buttonCombinations(buttons []Button, numLights int) map[uint][]ButtonCombination {
-	combinations := make(map[uint][]ButtonCombination)
-	numSubsets := 1 << len(buttons)
+// computeButtonCombinations generates all possible subsets of buttons and groups
+// them by their parity mask.
+func computeButtonCombinations(m machine) map[uint64][]buttonCombination {
+	combinations := make(map[uint64][]buttonCombination)
+	numSubsets := 1 << len(m.buttons)
+	numLights := len(m.joltages)
+
 	for mask := range numSubsets {
-		combination := newButtonCombination(mask, buttons, numLights)
-		parityMask := parityMask(combination.Joltages)
-		combinations[parityMask] = append(combinations[parityMask], combination)
+		combo := makeButtonCombination(mask, m.buttons, numLights)
+		pm := parityMask(combo.lights)
+		combinations[pm] = append(combinations[pm], combo)
 	}
 	return combinations
 }
 
-// newButtonCombination creates a new ButtonCombination by selecting a subset of
-// buttons using the mask
-func newButtonCombination(mask int, buttons []Button, numLights int) ButtonCombination {
-	joltages := make([]int, numLights)
+func makeButtonCombination(mask int, buttons [][]int, numLights int) buttonCombination {
+	lights := make([]int, numLights)
 	cost := 0
-	for i, button := range buttons {
+	for i, btn := range buttons {
 		if (mask & (1 << i)) != 0 {
 			cost++
-			for _, light := range button {
-				joltages[light]++
+			for _, lightIdx := range btn {
+				if lightIdx < len(lights) {
+					lights[lightIdx]++
+				}
 			}
 		}
 	}
-	return ButtonCombination{Cost: cost, Joltages: joltages}
+	return buttonCombination{cost: cost, lights: lights}
 }
 
-// tryCombination reduces the state of joltages by applying a button combination
-func tryCombination(joltages []int, combination ButtonCombination) ([]int, bool) {
+func tryReduce(joltages []int, combo buttonCombination) ([]int, bool) {
 	next := make([]int, len(joltages))
 	for i, v := range joltages {
-		diff := v - combination.Joltages[i]
+		diff := v - combo.lights[i]
 		if diff < 0 {
 			return nil, false
 		}
@@ -130,81 +162,71 @@ func tryCombination(joltages []int, combination ButtonCombination) ([]int, bool)
 	return next, true
 }
 
-// isZero returns whether all elements in nums are zero
-func isZero(nums []int) bool {
-	for _, num := range nums {
-		if num != 0 {
+func allZero(nums []int) bool {
+	for _, n := range nums {
+		if n != 0 {
 			return false
 		}
 	}
 	return true
 }
 
-// parityMask returns a bitmask representing the element-wise parity of nums
-func parityMask(nums []int) uint {
-	mask := uint(0)
-	for i, num := range nums {
-		if (num & 1) == 1 {
-			mask |= (1 << i)
+func parityMask(nums []int) uint64 {
+	var mask uint64
+	for i, n := range nums {
+		if n%2 != 0 {
+			mask |= 1 << i
 		}
 	}
 	return mask
 }
 
-func solveMachine(m Machine) int {
-	minCost := len(m.Buttons)
-	var solve func(index int, state uint, cost int)
-	solve = func(index int, state uint, cost int) {
-		if cost >= minCost {
-			return
+func parseInput(input string) []machine {
+	var machines []machine
+	input = strings.TrimSpace(input)
+	for line := range strings.SplitSeq(input, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
-		if index == len(m.Buttons) {
-			if state == m.Lights {
-				minCost = cost
-			}
-			return
-		}
-		mask := uint(0)
-		for _, light := range m.Buttons[index] {
-			mask |= 1 << light
-		}
-		solve(index+1, state^mask, cost+1)
-		solve(index+1, state, cost)
-	}
-	solve(0, 0, 0)
-	return minCost
-}
 
-func parseInput(r io.Reader) []Machine {
-	var machines []Machine
-	s := bufio.NewScanner(r)
-	for s.Scan() {
-		tokens := strings.Fields(s.Text())
-		lights := uint(0)
-		for i, c := range strings.Trim(tokens[0], "[]") {
+		tokens := strings.Fields(line)
+		if len(tokens) < 2 {
+			panic(fmt.Sprintf("invalid line format: %s", line))
+		}
+
+		// Parse target lights: "[#..#.]"
+		lightStr := strings.Trim(tokens[0], "[]")
+		var lights uint64
+		for i, c := range lightStr {
 			if c == '#' {
-				lights |= (1 << i)
+				lights |= 1 << i
 			}
 		}
-		buttons := make([]Button, 0, len(tokens)-2)
+
+		// Parse buttons: "(1,2)"
+		var buttons [][]int
 		for _, token := range tokens[1 : len(tokens)-1] {
-			var button []int
-			for num := range strings.SplitSeq(strings.Trim(token, "()"), ",") {
-				button = append(button, must.Get(strconv.Atoi(num)))
-			}
-			buttons = append(buttons, button)
+			buttons = append(buttons, parseCSVInts(strings.Trim(token, "()")))
 		}
 
-		var joltages []int
-		for num := range strings.SplitSeq(strings.Trim(tokens[len(tokens)-1], "{}"), ",") {
-			joltages = append(joltages, must.Get(strconv.Atoi(num)))
-		}
+		// Parse joltages: "{103,34...}"
+		joltStr := strings.Trim(tokens[len(tokens)-1], "{}")
+		joltages := parseCSVInts(joltStr)
 
-		machines = append(machines, Machine{
-			Lights:   lights,
-			Buttons:  buttons,
-			Joltages: joltages,
+		machines = append(machines, machine{
+			targetLights: lights,
+			buttons:      buttons,
+			joltages:     joltages,
 		})
 	}
+
 	return machines
+}
+
+func parseCSVInts(s string) []int {
+	var nums []int
+	for s := range strings.SplitSeq(s, ",") {
+		nums = append(nums, must.Get(strconv.Atoi(s)))
+	}
+	return nums
 }
